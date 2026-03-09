@@ -1,14 +1,16 @@
 import { Pool } from "pg"
-import { logger } from "../logging/logger"
+import { logger } from "../lib/logger"
+
+type RetryPayload = Record<string, unknown>
 
 interface RetryItem {
   job: string
-  payload: any
+  payload: RetryPayload
 }
 
 const queue: RetryItem[] = []
 
-export function enqueueRetry(job: string, payload: any) {
+export function enqueueRetry(job: string, payload: RetryPayload) {
   queue.push({ job, payload })
 }
 

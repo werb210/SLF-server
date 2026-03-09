@@ -1,7 +1,8 @@
 import cron from "node-cron"
+import { logger } from "../lib/logger"
 
 export function startMonthlySnapshot() {
   cron.schedule("0 0 1 * *", async () => {
-    console.log("Running monthly commission snapshot")
+    logger.info("Running monthly commission snapshot")
   })
 }

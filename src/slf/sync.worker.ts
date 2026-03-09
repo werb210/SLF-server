@@ -1,7 +1,8 @@
 import cron from "node-cron"
+import { logger } from "../lib/logger"
 
 export async function syncAllFamilies(force = false) {
-  console.log("Running SLF sync worker", { force })
+  logger.info({ force }, "Running SLF sync worker")
 }
 
 export function startSyncWorker() {

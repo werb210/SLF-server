@@ -6,18 +6,21 @@ import { errorHandler } from "./middleware/errorHandler"
 import { rawBodyMiddleware } from "./middleware/rawBody"
 import { verifyHmac } from "./middleware/hmacAuth"
 import { idempotency } from "./middleware/idempotency"
+import { requestId } from "./middleware/requestId"
+import { requireAuth } from "./middleware/auth"
 
 import { dealsRouter } from "./routes/deals"
 import { docsRouter } from "./routes/docs"
+import { healthRouter } from "./routes/health"
 
 import { runMigrations } from "./db/init"
 import { startSyncWorker } from "./slf/sync.worker"
 import { startMonthlySnapshot } from "./cron/monthlySnapshot"
 
-import { logger } from "./logging/logger"
+import { logger } from "./lib/logger"
 import { env } from "./config/env"
 
-const PORT = Number(env.PORT || 4001)
+const PORT = Number(env.PORT)
 
 const pool = new Pool({
   connectionString: env.DATABASE_URL
@@ -29,22 +32,20 @@ async function start() {
   const app = express()
 
   app.use(requestLogger)
-
+  app.use(requestId)
   app.use(rawBodyMiddleware)
+  app.use(idempotency)
 
-  app.get("/health", async (_, res) => {
-    await pool.query("SELECT 1")
-    res.json({ status: "ok" })
-  })
+  app.use("/health", healthRouter(pool))
 
-  app.use("/deals", verifyHmac(env.HMAC_SECRET), idempotency(pool), dealsRouter(pool))
+  app.use("/deals", requireAuth, verifyHmac(env.HMAC_SECRET), dealsRouter(pool))
 
   docsRouter(app)
 
   app.use(errorHandler)
 
   app.listen(PORT, () => {
-    logger.info(`SLF server running on port ${PORT}`)
+    logger.info({ port: PORT }, "SLF server running")
   })
 
   startSyncWorker()

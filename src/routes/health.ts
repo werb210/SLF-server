@@ -1,8 +1,25 @@
-import { Router } from "express";
-const router = Router();
+import { Router } from "express"
+import { Pool } from "pg"
 
-router.get("/", (_, res) => {
-  res.json({ status: "ok", service: "slf-server" });
-});
+export function healthRouter(pool: Pool) {
+  const router = Router()
 
-export default router;
+  router.get("/", (_req, res) => {
+    res.json({ success: true, data: { status: "ok", uptime: process.uptime(), timestamp: Date.now() } })
+  })
+
+  router.get("/db", async (_req, res, next) => {
+    try {
+      await pool.query("SELECT 1")
+      res.json({ success: true, data: { status: "db-ok" } })
+    } catch (error) {
+      next(error)
+    }
+  })
+
+  router.get("/queue", (_req, res) => {
+    res.json({ success: true, data: { status: "queue-ok" } })
+  })
+
+  return router
+}
