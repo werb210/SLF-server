@@ -1,0 +1,25 @@
+openapi: 3.0.0
+info:
+  title: SLF Server API
+  version: 1.0.0
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Server health
+
+  /deals:
+    post:
+      summary: Create deal
+      responses:
+        '200':
+          description: Deal created
+
+    get:
+      summary: List deals
+      responses:
+        '200':
+          description: Deal list
