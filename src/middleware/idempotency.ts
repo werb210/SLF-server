@@ -19,5 +19,9 @@ export function idempotency(req: Request, res: Response, next: NextFunction) {
   }
 
   store.set(key, true)
+  setTimeout(() => {
+    store.delete(key)
+  }, 1000 * 60 * 60)
+
   return next()
 }
