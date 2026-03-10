@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS slf_sync_log (
-  uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   last_sync TIMESTAMP DEFAULT NOW(),
   records_synced INTEGER DEFAULT 0,
   status TEXT,

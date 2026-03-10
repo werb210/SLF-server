@@ -5,7 +5,7 @@ export async function runSchema() {
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
     CREATE TABLE IF NOT EXISTS slf_deals (
-      uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       external_id TEXT UNIQUE,
       business_unit TEXT NOT NULL DEFAULT 'SLF',
       product_family TEXT NOT NULL,
@@ -19,7 +19,7 @@ export async function runSchema() {
     );
 
     CREATE TABLE IF NOT EXISTS slf_idempotency (
-      uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       idempotency_key TEXT UNIQUE,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW(),
@@ -27,9 +27,9 @@ export async function runSchema() {
     );
 
     CREATE TABLE IF NOT EXISTS slf_logs (
-      uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       entity_type TEXT,
-      entity_uuid UUID,
+      entity_id UUID,
       event_type TEXT,
       metadata JSONB,
       created_at TIMESTAMP DEFAULT NOW(),

@@ -2,23 +2,24 @@ import express from "express"
 import { Pool } from "pg"
 
 import { requestLogger } from "./middleware/requestLogger"
-import { errorHandler } from "./middleware/errorHandler"
 import { rawBodyMiddleware } from "./middleware/rawBody"
 import { verifyHmac } from "./middleware/hmacAuth"
-import { idempotency } from "./middleware/idempotency"
-import { requestId } from "./middleware/requestId"
-import { requireAuth } from "./middleware/auth"
 
 import { dealsRouter } from "./routes/deals"
 import { docsRouter } from "./routes/docs"
-import { healthRouter } from "./routes/health"
 
 import { runMigrations } from "./db/init"
 import { startSyncWorker } from "./slf/sync.worker"
 import { startMonthlySnapshot } from "./cron/monthlySnapshot"
 
-import { logger } from "./lib/logger"
-import { env } from "./config/env"
+import { logger } from "./platform/logger"
+import { env } from "./platform/env"
+import { errorHandler } from "./platform/errorHandler"
+import { idempotency } from "./platform/idempotency"
+import { requestId } from "./platform/requestId"
+import { requireAuth } from "./platform/auth"
+import healthRoutes from "./platform/healthRoutes"
+import metricsRoutes from "./platform/metricsRoutes"
 
 const PORT = Number(env.PORT)
 
@@ -31,12 +32,15 @@ async function start() {
 
   const app = express()
 
-  app.use(requestLogger)
   app.use(requestId)
-  app.use(rawBodyMiddleware)
   app.use(idempotency)
+  app.use(express.json())
 
-  app.use("/health", healthRouter(pool))
+  app.use(requestLogger)
+  app.use(rawBodyMiddleware)
+
+  app.use("/health", healthRoutes)
+  app.use(metricsRoutes)
 
   app.use("/deals", requireAuth, verifyHmac(env.HMAC_SECRET), dealsRouter(pool))
 

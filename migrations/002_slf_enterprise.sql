@@ -10,7 +10,7 @@ SET business_unit = 'SLF'
 WHERE business_unit IS NULL;
 
 CREATE TABLE IF NOT EXISTS slf_monthly_commission_snapshots (
-  uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   month TEXT NOT NULL,
   total_submitted INTEGER NOT NULL,
   total_funded INTEGER NOT NULL,
