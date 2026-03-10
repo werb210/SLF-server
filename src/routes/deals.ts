@@ -1,19 +1,30 @@
 import { Router } from "express"
 import { Pool } from "pg"
+import { z } from "zod"
 
-interface DealPayload {
-  external_id: string
-  borrower_name?: string
-  amount?: number
-  product_family?: string
-}
+const dealPayloadSchema = z.object({
+  external_id: z.string().min(1),
+  borrower_name: z.string().min(1).optional(),
+  amount: z.number().finite().optional(),
+  product_family: z.string().min(1).optional()
+})
 
 export function dealsRouter(pool: Pool) {
   const router = Router()
 
   router.post("/", async (req, res, next) => {
     try {
-      const payload = req.body as DealPayload
+      const parsedPayload = dealPayloadSchema.safeParse(req.body)
+
+      if (!parsedPayload.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request body",
+          issues: parsedPayload.error.issues
+        })
+      }
+
+      const payload = parsedPayload.data
 
       const result = await pool.query(
         `INSERT INTO slf_deals

@@ -1,25 +1,32 @@
 import { NextFunction, Request, Response } from "express"
+import { pool } from "../db/index"
 
-const requests = new Map<string, boolean>()
+export async function idempotency(req: Request, res: Response, next: NextFunction) {
+  if (!["POST", "PATCH", "DELETE"].includes(req.method)) {
+    return next()
+  }
 
-export function idempotency(req: Request, res: Response, next: NextFunction) {
-  const rawKey = req.headers["idempotency-key"]
+  const rawKey = req.headers["idempotency-key"] ?? req.headers["x-idempotency-key"]
   const key = typeof rawKey === "string" ? rawKey : undefined
 
   if (!key) return next()
 
-  if (requests.has(key)) {
-    return res.status(409).json({
-      success: false,
-      error: "Duplicate request"
-    })
+  try {
+    await pool.query("INSERT INTO slf_idempotency (idempotency_key) VALUES ($1)", [key])
+    return next()
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "23505"
+    ) {
+      return res.status(409).json({
+        success: false,
+        error: "Duplicate request"
+      })
+    }
+
+    return next(error)
   }
-
-  requests.set(key, true)
-
-  setTimeout(() => {
-    requests.delete(key)
-  }, 3600000)
-
-  return next()
 }

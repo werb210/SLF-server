@@ -8,7 +8,6 @@ import { verifyHmac } from "./middleware/hmacAuth"
 import { dealsRouter } from "./routes/deals"
 import { docsRouter } from "./routes/docs"
 
-import { runMigrations } from "./db/init"
 import { startSyncWorker } from "./slf/sync.worker"
 import { startMonthlySnapshot } from "./cron/monthlySnapshot"
 
@@ -28,7 +27,6 @@ const pool = new Pool({
 })
 
 async function start() {
-  await runMigrations(pool)
 
   const app = express()
 
