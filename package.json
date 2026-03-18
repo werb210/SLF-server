@@ -10,7 +10,8 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "migrate": "npm run build --silent && node dist/scripts/migrate.js"
+    "migrate": "npm run build --silent && node dist/scripts/migrate.js",
+    "test:integration": "ts-node test/integration.ts"
   },
   "keywords": [],
   "author": "",
