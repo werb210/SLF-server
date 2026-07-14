@@ -1,7 +1,0 @@
-export type SLFStage =
-  | 'INTAKE'
-  | 'UNDER_REVIEW'
-  | 'FUNDED'
-  | 'DECLINED'
-  | 'COMMISSION_PENDING'
-  | 'COMMISSION_PAID';

@@ -1,80 +1,9 @@
-import { upsertDeal } from "./slf.repository"
-import { logger } from "../logger"
+// SLF_FULL_MODEL_v1
+import { logger } from "../platform/logger"
 import { calculateBackoff } from "./backoff"
 import { slfClient } from "./client"
-import { slfState } from "./slf.state"
-import { normalizeStatus } from "../statusMap"
-
-function getErrorMessage(err: unknown): string {
-  if (
-    typeof err === "object" &&
-    err !== null &&
-    "response" in err &&
-    typeof (err as { response?: { data?: { detail?: string } } }).response === "object"
-  ) {
-    const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-
-    if (typeof detail === "string") {
-      return detail
-    }
-  }
-
-  if (err instanceof Error) {
-    return err.message
-  }
-
-  return "Unknown SLF sync error"
-}
-
-export async function syncFamily(productFamily: string): Promise<number> {
-  const now = Date.now()
-
-  if (slfState.suspendedUntil && now < slfState.suspendedUntil) {
-    logger.warn(
-      `SLF ${productFamily} sync is suspended until ${new Date(slfState.suspendedUntil).toISOString()}`
-    )
-    return 0
-  }
-
-  const endpoint = `/api/${productFamily}/request/`
-  logger.info(`Syncing ${productFamily}`)
-
-  try {
-    const { data } = await slfClient.get(endpoint)
-
-    let recordsSynced = 0
-
-    for (const deal of data) {
-      const normalized = normalizeStatus(deal?.status)
-
-      await upsertDeal(
-        deal.id || deal.uuid,
-        productFamily,
-        deal,
-        deal.borrower || deal.borrower_name || null,
-        typeof deal.amount === "number" ? deal.amount : null,
-        normalized
-      )
-      recordsSynced += 1
-    }
-
-    slfState.lastSuccessfulSync = now
-    slfState.consecutiveFailures = 0
-    slfState.lastError = null
-    slfState.suspendedUntil = null
-
-    logger.info(`Sync complete for ${productFamily}`)
-
-    return recordsSynced
-  } catch (err: unknown) {
-    slfState.consecutiveFailures += 1
-    slfState.lastError = getErrorMessage(err)
-
-    const backoff = calculateBackoff(slfState.consecutiveFailures)
-    slfState.suspendedUntil = now + backoff
-
-    logger.error(`SLF ${productFamily} sync failed: ${slfState.lastError}. Backing off ${backoff / 1000}s`)
-
-    throw err
-  }
-}
+import { stateFor } from "./slf.state"
+import { ingestRequest } from "./ingest"
+function getErrorMessage(err: unknown): string { if (typeof err === "object" && err !== null && "response" in err) { const r = (err as { response?: { status?: number; data?: unknown } }).response; if (r) return `HTTP ${r.status ?? "?"}: ${JSON.stringify(r.data).slice(0, 300)}` } if (err instanceof Error) return err.message; return "Unknown SLF sync error" }
+function itemsOf(data: unknown): Record<string, unknown>[] { if (Array.isArray(data)) return data as Record<string, unknown>[]; if (data && typeof data === "object" && Array.isArray((data as { results?: unknown[] }).results)) return (data as { results: Record<string, unknown>[] }).results; return [] }
+export async function syncFamily(productFamily: string): Promise<number> { const st = stateFor(productFamily); const now = Date.now(); if (st.suspendedUntil && now < st.suspendedUntil) { logger.warn(`SLF ${productFamily} suspended until ${new Date(st.suspendedUntil).toISOString()}`); return 0 } let url: string | null = `/api/${productFamily}/request/`; let synced = 0; try { while (url) { const resp: { data: unknown } = await slfClient.get(url); const data: unknown = resp.data; for (const item of itemsOf(data)) { await ingestRequest(productFamily, item as Record<string, any>); synced += 1 } const nextUrl: string | null = data && typeof data === "object" ? ((data as { next?: string | null }).next ?? null) : null; url = nextUrl ? nextUrl.replace(String(slfClient.defaults.baseURL ?? ""), "") : null } st.lastSuccessfulSync = now; st.consecutiveFailures = 0; st.lastError = null; st.suspendedUntil = null; logger.info({ family: productFamily, synced }, "SLF sync complete"); return synced } catch (err: unknown) { st.consecutiveFailures += 1; st.lastError = getErrorMessage(err); const backoff = calculateBackoff(st.consecutiveFailures); st.suspendedUntil = now + backoff; logger.error({ family: productFamily, err: st.lastError }, `SLF sync failed; backing off ${backoff / 1000}s`); throw err } }
