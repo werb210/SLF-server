@@ -1,5 +1,5 @@
 import express from "express"
-import { pool } from "../db"
+import { pool } from "../db/pool"
 import { env } from "./env"
 
 const router = express.Router()

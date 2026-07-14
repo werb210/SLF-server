@@ -15,6 +15,8 @@ export const envSchema = z.object({
   HMAC_SECRET: z.string().default(""),
   SLF_TOKEN: z.string().default(""),
   SLF_BASE_URL: z.string().default(""),
+  SLF_AUTH_SCHEME: z.string().default("Token"),
+  ALLOWED_ORIGINS: z.string().default("https://staff.boreal.financial"),
   LOG_LEVEL: z.string().default("info"),
   SLF_PRODUCT_FAMILIES: z.string().default("credit,equipment-financing,factoring-bid,invoice"),
   SYNC_INTERVAL_MINUTES: z.string().default("5"),
