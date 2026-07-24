@@ -7,6 +7,8 @@ export const REQUEST_FILE_FIELDS = [
   "terms",
   "signedTermsFiles",
   "signedFiles",
+  "initialFiles",
+  "signedInitialFiles",
   "additionalFiles",
 ] as const;
 
@@ -70,9 +72,12 @@ export function extractAmount(req: Json): number | null {
 
 export function extractCompanyName(req: Json): string | null {
   return first<string>(
-    req.sub?.companyName,
+    typeof req.sub === "string" ? req.sub : req.sub?.companyName,
     req.companyName,
     req.company_name,
+    typeof req.invoices?.[0]?.sub === "string"
+      ? req.invoices[0].sub
+      : req.invoices?.[0]?.sub?.companyName,
     req.invoices?.[0]?.companyName,
     req.invoices?.[0]?.company,
     req.invoices?.[0]?.customerName,
