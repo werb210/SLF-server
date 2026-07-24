@@ -4,13 +4,14 @@ import {
   extractCompanyName,
   extractLender,
   extractTerms,
-} from "../normalize";
+  REQUEST_FILE_FIELDS,
+} from "../src/slf/normalize";
 
 describe("SLF family alignment normalization", () => {
   it("maps invoice/factoring bid fields without requiring the credit request shape", () => {
     const req = {
       id: 11,
-      invoices: [{ companyName: "Acme Demo", amount: "150000" }],
+      invoices: [{ sub: "SunVolt Electric", amount: "150000" }],
       advanceRate: "90",
       discountRate: "7",
       holdbackPercent: "10",
@@ -18,7 +19,7 @@ describe("SLF family alignment normalization", () => {
     };
 
     expect(extractAmount(req)).toBe(150000);
-    expect(extractCompanyName(req)).toBe("Acme Demo");
+    expect(extractCompanyName(req)).toBe("SunVolt Electric");
     expect(extractLender(req)).toEqual({
       name: "SLF Capital",
       logo: "logo.png",
@@ -32,6 +33,18 @@ describe("SLF family alignment normalization", () => {
       holdbackPercent: 10,
       netAmount: 125550,
     });
+  });
+
+  it("collects initial and signed initial file fields", () => {
+    expect(REQUEST_FILE_FIELDS).toEqual([
+      "files",
+      "terms",
+      "signedTermsFiles",
+      "signedFiles",
+      "initialFiles",
+      "signedInitialFiles",
+      "additionalFiles",
+    ]);
   });
 
   it("keeps existing credit-style top-level amount semantics", () => {
