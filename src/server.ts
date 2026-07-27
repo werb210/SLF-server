@@ -3,6 +3,7 @@ import cors from "cors"
 import helmet from "helmet"
 import { Pool } from "pg"
 import { requestLogger } from "./middleware/requestLogger"
+import { buildCorsOrigin } from "./platform/corsOrigin" // SLF_CORS_NATIVE_APP_v1
 import { slfRouter } from "./routes/slf"
 import { docsRouter } from "./routes/docs"
 import { startSyncWorker } from "./slf/sync.worker"
@@ -21,7 +22,7 @@ const PORT = Number(env.PORT)
 // env.DATABASE_URL, bypassing the normalisation in db/pool.ts. It only runs
 // migrations, but that is the connection carrying the schema.
 const pool = new Pool({ connectionString: withExplicitSslMode(env.DATABASE_URL) })
-async function start() { await runMigrations(pool); logger.info("[MIGRATIONS] All migrations applied."); const app = express(); const origins = env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean); app.use(helmet()); app.use(cors({ origin: origins, credentials: true })); app.use(requestId); app.use(express.json({ limit: "2mb" })); app.use(requestLogger); // SLF_ROOT_ROUTE_v1 - AlwaysOn and the platform warm-up both hit "/", which
+async function start() { await runMigrations(pool); logger.info("[MIGRATIONS] All migrations applied."); const app = express(); const origins = env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean); app.use(helmet()); /* SLF_CORS_NATIVE_APP_v1 */ app.use(cors({ origin: buildCorsOrigin(origins), credentials: true })); app.use(requestId); app.use(express.json({ limit: "2mb" })); app.use(requestLogger); // SLF_ROOT_ROUTE_v1 - AlwaysOn and the platform warm-up both hit "/", which
     // had no handler, so every ping logged a 404.
     app.get("/", (_req, res) => { res.json({ service: env.SERVICE_NAME, status: "ok" }); });
     app.use("/health", healthRoutes); app.use(metricsRoutes); app.use("/api/slf", requireAuth, slfRouter()); docsRouter(app); app.use(errorHandler); app.listen(PORT, () => logger.info({ port: PORT }, "SLF server running")); startSyncWorker(); startMonthlySnapshot() }
