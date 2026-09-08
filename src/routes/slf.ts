@@ -13,7 +13,7 @@ export function slfRouter() {
       >;
       const limit = Math.min(Number(req.query.limit) || 100, 500);
       const offset = Number(req.query.offset) || 0;
-      const where: string[] = ["r.hidden IS NOT TRUE"];
+      const where: string[] = ["r.retired_at IS NULL", "r.hidden IS NOT TRUE"];
       const p: unknown[] = [];
       if (stage) {
         p.push(stage);
@@ -50,9 +50,12 @@ export function slfRouter() {
     try {
       const id = Number(req.params.id);
       const [reqRow, sub, contracts, offers, files] = await Promise.all([
-        pool.query(`SELECT * FROM slf_requests WHERE id = $1`, [id]),
         pool.query(
-          `SELECT s.*, a.email AS admin_email, a.first_name AS admin_first_name, a.last_name AS admin_last_name, a.phone_number AS admin_phone FROM slf_requests r JOIN slf_subs s ON s.id = r.sub_id LEFT JOIN slf_users a ON a.id = s.admin_user_id WHERE r.id = $1`,
+          `SELECT * FROM slf_requests WHERE retired_at IS NULL AND id = $1`,
+          [id],
+        ),
+        pool.query(
+          `SELECT s.*, a.email AS admin_email, a.first_name AS admin_first_name, a.last_name AS admin_last_name, a.phone_number AS admin_phone FROM slf_requests r JOIN slf_subs s ON s.id = r.sub_id LEFT JOIN slf_users a ON a.id = s.admin_user_id WHERE r.retired_at IS NULL AND r.id = $1`,
           [id],
         ),
         pool.query(
@@ -64,7 +67,7 @@ export function slfRouter() {
           [id],
         ),
         pool.query(
-          `SELECT * FROM slf_files WHERE request_id = $1 OR (owner_kind = 'sub' AND owner_id = (SELECT sub_id FROM slf_requests WHERE id = $1)) ORDER BY uploaded_at DESC NULLS LAST, id DESC`,
+          `SELECT * FROM slf_files WHERE request_id = $1 OR (owner_kind = 'sub' AND owner_id = (SELECT sub_id FROM slf_requests WHERE retired_at IS NULL AND id = $1)) ORDER BY uploaded_at DESC NULLS LAST, id DESC`,
           [id],
         ),
       ]);
@@ -142,7 +145,7 @@ export function slfRouter() {
   r.get("/subs", async (_req, res, next) => {
     try {
       const { rows } = await pool.query(
-        `SELECT s.*, count(r.id) AS request_count, coalesce(sum(r.amount),0) AS requested_total FROM slf_subs s LEFT JOIN slf_requests r ON r.sub_id = s.id GROUP BY s.id ORDER BY s.company_name`,
+        `SELECT s.*, count(r.id) AS request_count, coalesce(sum(r.amount),0) AS requested_total FROM slf_subs s LEFT JOIN slf_requests r ON r.sub_id = s.id AND r.retired_at IS NULL GROUP BY s.id ORDER BY s.company_name`,
       );
       res.json({ success: true, data: rows });
     } catch (e) {
@@ -163,10 +166,10 @@ export function slfRouter() {
     try {
       const [byStage, byFamily, sync] = await Promise.all([
         pool.query(
-          `SELECT stage, count(*) AS n, coalesce(sum(amount),0) AS total, coalesce(sum(advance_amount),0) AS advance_total, count(*) FILTER (WHERE amount IS NULL) AS unmapped FROM slf_requests WHERE hidden IS NOT TRUE GROUP BY stage`,
+          `SELECT stage, count(*) AS n, coalesce(sum(amount),0) AS total, coalesce(sum(advance_amount),0) AS advance_total, count(*) FILTER (WHERE amount IS NULL) AS unmapped FROM slf_requests WHERE retired_at IS NULL AND hidden IS NOT TRUE GROUP BY stage`,
         ),
         pool.query(
-          `SELECT product_family, count(*) AS n FROM slf_requests GROUP BY product_family`,
+          `SELECT product_family, count(*) AS n FROM slf_requests WHERE retired_at IS NULL GROUP BY product_family`,
         ),
         pool.query(
           `SELECT * FROM slf_sync_runs ORDER BY started_at DESC LIMIT 10`,
