@@ -7,6 +7,8 @@ import { ingestRequest } from "./ingest";
 // SLF_RETIRE_STALE_v1
 import { pool } from "../db/pool";
 function getErrorMessage(err: unknown): string {
+  // SLF_REDACT_v1 - response body only; never the request config, which
+  // carries Authorization.
   if (typeof err === "object" && err !== null && "response" in err) {
     const r = (err as { response?: { status?: number; data?: unknown } })
       .response;
