@@ -3,6 +3,7 @@ import { Router } from "express";
 import { pool } from "../db/pool";
 import { syncAllFamilies } from "../slf/sync.worker";
 import { slfClient } from "../slf/client"; // SLF_BROKER_OF_RECORD_v1
+import { dealIdToKey } from "../slf/requestKey"; // SLF_FAMILY_KEY_v1
 export function slfRouter() {
   const r = Router();
   r.get("/deals", async (req, res, next) => {
@@ -38,7 +39,7 @@ export function slfRouter() {
       p.push(offset);
       const off = p.length;
       const { rows } = await pool.query(
-        `SELECT r.id, r.product_family, r.amount, r.stage, r.notes, r.country, r.is_active, r.is_complete, r.offered, r.ongoing_loc_count, r.ongoing_loc_total, r.last_synced_at, r.external_status, r.lender_name AS request_lender_name, r.lender_logo, r.invoice_total, r.invoice_count, r.advance_rate, r.advance_amount, r.discount_rate, r.holdback_percent, r.net_amount, s.id AS sub_id, COALESCE(s.company_name, r.company_name) AS company_name, s.city, s.province, s.sub_trade, s.is_approved, s.business_bankruptcy, s.personal_bankruptcy, u.first_name, u.last_name, u.email, u.phone_number, o.lender_name, o.status AS offer_status, o.amount AS offer_amount, o.original_interest_rate, o.interest_rate_type, o.reject_reason, (SELECT count(*) FROM slf_files f WHERE f.request_id = r.id) AS file_count, (SELECT count(*) FROM slf_contracts k WHERE k.request_id = r.id) AS contract_count FROM slf_requests r LEFT JOIN slf_subs s ON s.id = r.sub_id LEFT JOIN slf_users u ON u.id = s.applicant_user_id LEFT JOIN LATERAL (SELECT * FROM slf_offers o2 WHERE o2.request_id = r.id ORDER BY (o2.status = 'accepted') DESC, o2.slf_created_at DESC NULLS LAST LIMIT 1) o ON true WHERE ${where.join(" AND ")} ORDER BY r.last_synced_at DESC, r.id DESC LIMIT $${lim} OFFSET $${off}`,
+        `SELECT (r.product_family || '-' || r.slf_id) AS id, r.slf_id, r.product_family, r.amount, r.stage, r.notes, r.country, r.is_active, r.is_complete, r.offered, r.ongoing_loc_count, r.ongoing_loc_total, r.last_synced_at, r.external_status, r.lender_name AS request_lender_name, r.lender_logo, r.invoice_total, r.invoice_count, r.advance_rate, r.advance_amount, r.discount_rate, r.holdback_percent, r.net_amount, s.id AS sub_id, COALESCE(s.company_name, r.company_name) AS company_name, s.city, s.province, s.sub_trade, s.is_approved, s.business_bankruptcy, s.personal_bankruptcy, u.first_name, u.last_name, u.email, u.phone_number, o.lender_name, o.status AS offer_status, o.amount AS offer_amount, o.original_interest_rate, o.interest_rate_type, o.reject_reason, (SELECT count(*) FROM slf_files f WHERE f.request_id = r.id) AS file_count, (SELECT count(*) FROM slf_contracts k WHERE k.request_id = r.id) AS contract_count FROM slf_requests r LEFT JOIN slf_subs s ON s.id = r.sub_id LEFT JOIN slf_users u ON u.id = s.applicant_user_id LEFT JOIN LATERAL (SELECT * FROM slf_offers o2 WHERE o2.request_id = r.id ORDER BY (o2.status = 'accepted') DESC, o2.slf_created_at DESC NULLS LAST LIMIT 1) o ON true WHERE ${where.join(" AND ")} ORDER BY r.last_synced_at DESC, r.id DESC LIMIT $${lim} OFFSET $${off}`,
         p,
       );
       res.json({ success: true, data: rows });
@@ -48,7 +49,10 @@ export function slfRouter() {
   });
   r.get("/deals/:id", async (req, res, next) => {
     try {
-      const id = Number(req.params.id);
+      // SLF_FAMILY_KEY_v1 - public id is "<family>-<slfId>".
+      const id = dealIdToKey(String(req.params.id));
+      if (id === null)
+        return res.status(404).json({ success: false, error: "not found" });
       const [reqRow, sub, contracts, offers, files] = await Promise.all([
         pool.query(
           `SELECT * FROM slf_requests WHERE retired_at IS NULL AND id = $1`,
@@ -129,7 +133,10 @@ export function slfRouter() {
       res.json({
         success: true,
         data: {
-          request: requestRow,
+          request: {
+            ...requestRow,
+            id: `${requestRow.product_family}-${requestRow.slf_id}`,
+          },
           sub: subRow,
           users,
           contracts: contracts.rows,
