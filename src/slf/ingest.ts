@@ -1,6 +1,7 @@
 // SLF_FULL_MODEL_v1 - persist the ENTIRE SLF request payload, relationally + raw.
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool";
+import { logger } from "../platform/logger";
 import { deriveStage, toBool, toNum, uploadedAtFromUrl } from "./derive";
 import {
   extractAmount,
@@ -131,8 +132,8 @@ export async function ingestRequest(family: string, req: Json): Promise<void> {
     const stage = deriveStage(req);
     const terms = extractTerms(req);
     const lender = extractLender(req);
-    await c.query(
-      `INSERT INTO slf_requests (id, product_family, sub_id, amount, notes, country, is_active, is_complete, hidden, offered, ongoing_loc_count, ongoing_loc_total, equipment_finance_request, stage, raw, company_name, external_status, lender_name, lender_logo, invoice_total, invoice_count, advance_rate, advance_amount, discount_rate, holdback_percent, net_amount, last_synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, now()) ON CONFLICT (id) DO UPDATE SET product_family=EXCLUDED.product_family, sub_id=EXCLUDED.sub_id, amount=EXCLUDED.amount, notes=EXCLUDED.notes, country=EXCLUDED.country, is_active=EXCLUDED.is_active, is_complete=EXCLUDED.is_complete, hidden=EXCLUDED.hidden, offered=EXCLUDED.offered, ongoing_loc_count=EXCLUDED.ongoing_loc_count, ongoing_loc_total=EXCLUDED.ongoing_loc_total, equipment_finance_request=EXCLUDED.equipment_finance_request, stage=EXCLUDED.stage, raw=EXCLUDED.raw, company_name=EXCLUDED.company_name, external_status=EXCLUDED.external_status, lender_name=EXCLUDED.lender_name, lender_logo=EXCLUDED.lender_logo, invoice_total=EXCLUDED.invoice_total, invoice_count=EXCLUDED.invoice_count, advance_rate=EXCLUDED.advance_rate, advance_amount=EXCLUDED.advance_amount, discount_rate=EXCLUDED.discount_rate, holdback_percent=EXCLUDED.holdback_percent, net_amount=EXCLUDED.net_amount, retired_at=NULL, last_synced_at=now()`,
+    const up = await c.query(
+      `INSERT INTO slf_requests (id, product_family, sub_id, amount, notes, country, is_active, is_complete, hidden, offered, ongoing_loc_count, ongoing_loc_total, equipment_finance_request, stage, raw, company_name, external_status, lender_name, lender_logo, invoice_total, invoice_count, advance_rate, advance_amount, discount_rate, holdback_percent, net_amount, last_synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, now()) ON CONFLICT (id) DO UPDATE SET product_family=EXCLUDED.product_family, sub_id=EXCLUDED.sub_id, amount=EXCLUDED.amount, notes=EXCLUDED.notes, country=EXCLUDED.country, is_active=EXCLUDED.is_active, is_complete=EXCLUDED.is_complete, hidden=EXCLUDED.hidden, offered=EXCLUDED.offered, ongoing_loc_count=EXCLUDED.ongoing_loc_count, ongoing_loc_total=EXCLUDED.ongoing_loc_total, equipment_finance_request=EXCLUDED.equipment_finance_request, stage=EXCLUDED.stage, raw=EXCLUDED.raw, company_name=EXCLUDED.company_name, external_status=EXCLUDED.external_status, lender_name=EXCLUDED.lender_name, lender_logo=EXCLUDED.lender_logo, invoice_total=EXCLUDED.invoice_total, invoice_count=EXCLUDED.invoice_count, advance_rate=EXCLUDED.advance_rate, advance_amount=EXCLUDED.advance_amount, discount_rate=EXCLUDED.discount_rate, holdback_percent=EXCLUDED.holdback_percent, net_amount=EXCLUDED.net_amount, retired_at=NULL, last_synced_at=now() WHERE slf_requests.product_family = EXCLUDED.product_family`,
       [
         requestId,
         family,
@@ -164,7 +165,22 @@ export async function ingestRequest(family: string, req: Json): Promise<void> {
         terms.netAmount,
       ],
     );
-    for (const k of Array.isArray(req.contracts) ? req.contracts : []) {
+    // SLF_REQUESTS_ENVELOPE_v1 - an id already owned by another family.
+    if (up.rowCount === 0) {
+      await c.query("ROLLBACK");
+      logger.warn(
+        { family, requestId },
+        "SLF request id already belongs to another product family; skipped",
+      );
+      return;
+    }
+    // Invoice rows carry a single `contract` object, not a `contracts` array.
+    const contracts: Json[] = Array.isArray(req.contracts)
+      ? req.contracts
+      : req.contract && typeof req.contract === "object"
+        ? [req.contract]
+        : [];
+    for (const k of contracts) {
       if (!k || typeof k.id !== "number") continue;
       await c.query(
         `INSERT INTO slf_contracts (id, request_id, sub_id, contract_number, amount, general_contractor, holdback_percent, notes, country, is_verified, change_orders, raw, last_synced_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now()) ON CONFLICT (id) DO UPDATE SET request_id=EXCLUDED.request_id, sub_id=EXCLUDED.sub_id, contract_number=EXCLUDED.contract_number, amount=EXCLUDED.amount, general_contractor=EXCLUDED.general_contractor, holdback_percent=EXCLUDED.holdback_percent, notes=EXCLUDED.notes, country=EXCLUDED.country, is_verified=EXCLUDED.is_verified, change_orders=EXCLUDED.change_orders, raw=EXCLUDED.raw, last_synced_at=now()`,
