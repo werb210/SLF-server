@@ -18,60 +18,102 @@ function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return "Unknown SLF sync error";
 }
-// SLF_BROKER_SYNC_v1
-// Verified against production with the Boreal Financial broker token, 15 Sep 2026:
-// /api/credit/request/, /api/equipment-financing/request/ and /api/invoice/
-// return { requests: [...], total, summary, allStates }; /api/factoring-bid/
-// returns a bare array. The old reader only knew bare arrays and { results },
-// so every envelope read as empty and the sync logged "synced: 0" forever.
-const ITEM_KEYS = ["results", "requests"] as const;
+// SLF_FAMILY_KEY_v1 - broker deal flow comes from one combined endpoint.
+type Item = Record<string, unknown>;
+export const ALL_REQUESTS_URL = "/api/fininst/requests/";
+export const FACTORING_OFFERS_URL = "/api/factoring-bid/";
 export const PAGE_SIZE = 100;
 const MAX_PAGES = 50;
-const OFFER_ONLY_FAMILIES = new Set(["factoring-bid"]);
-export function itemsOf(data: unknown): Record<string, unknown>[] | null {
-  if (Array.isArray(data)) return data as Record<string, unknown>[];
-  if (data && typeof data === "object") {
-    for (const k of ITEM_KEYS) {
-      const v = (data as Record<string, unknown>)[k];
-      if (Array.isArray(v)) return v as Record<string, unknown>[];
+const CACHE_MS = 60_000;
+
+export function itemsOf(data: unknown): Item[] | null {
+  if (Array.isArray(data)) return data as Item[];
+  if (data && typeof data === "object")
+    for (const key of ["results", "requests"]) {
+      const value = (data as Item)[key];
+      if (Array.isArray(value)) return value as Item[];
     }
-  }
-  return null; // unrecognised - caller must warn, never treat as empty
+  return null;
 }
 function totalOf(data: unknown): number | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const d = data as { total?: unknown; count?: unknown };
-  const t = typeof d.total === "number" ? d.total : d.count;
-  return typeof t === "number" && Number.isFinite(t) ? t : null;
+  const total = typeof d.total === "number" ? d.total : d.count;
+  return typeof total === "number" && Number.isFinite(total) ? total : null;
 }
-function warnUnrecognised(family: string, url: string, data: unknown) {
-  // Key names only - values can carry applicant PII.
-  logger.warn(
-    {
-      family,
-      url,
-      shape: Array.isArray(data) ? "array" : typeof data,
-      keys:
-        data && typeof data === "object"
-          ? Object.keys(data as object).slice(0, 20)
-          : [],
-    },
-    "SLF response envelope not recognised; ingested nothing from this page",
-  );
+const has = (item: Item, key: string) =>
+  Object.prototype.hasOwnProperty.call(item, key);
+export function classifyRequest(item: Item): string | null {
+  if (has(item, "invoiceNumber")) return "invoice";
+  if (["reason", "terms", "quoteFile", "poFile"].some((key) => has(item, key)))
+    return "equipment-financing";
+  if (has(item, "equipmentFinanceRequest") || has(item, "notes"))
+    return "credit";
+  return null;
 }
-// SLF_SYNC_LIST_URL_v1 - not every product family exposes /request/. Per the
-// SLF OpenAPI spec, credit and equipment-financing do, but factoring-bid and
-// invoice are served from their bare collection path. Requesting
-// /api/factoring-bid/request/ or /api/invoice/request/ 404s, which tripped the
-// failure counter and suspended those families via backoff.
-const FAMILY_LIST_URL: Record<string, string> = {
-  credit: "/api/credit/request/",
-  "equipment-financing": "/api/equipment-financing/request/",
-  "factoring-bid": "/api/factoring-bid/",
-  invoice: "/api/invoice/",
+function keysOnly(data: unknown): string[] {
+  return data && typeof data === "object"
+    ? Object.keys(data as object).slice(0, 20)
+    : [];
+}
+type Snapshot = {
+  byFamily: Map<string, Item[]>;
+  complete: boolean;
+  total: number | null;
 };
-export function listUrlFor(productFamily: string): string {
-  return FAMILY_LIST_URL[productFamily] ?? `/api/${productFamily}/request/`;
+let cache: { at: number; snap: Snapshot } | null = null;
+export function resetRequestCache() {
+  cache = null;
+}
+async function loadAllRequests(): Promise<Snapshot> {
+  if (cache && Date.now() - cache.at < CACHE_MS) return cache.snap;
+  const byFamily = new Map<string, Item[]>();
+  let complete = false,
+    total: number | null = null,
+    read = 0,
+    unknown = 0;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = `${ALL_REQUESTS_URL}?page=${page}&page_size=${PAGE_SIZE}`;
+    const { data } = await slfClient.get(url);
+    const items = itemsOf(data);
+    if (items === null) {
+      logger.warn(
+        { url, keys: keysOnly(data) },
+        "SLF response envelope not recognised",
+      );
+      break;
+    }
+    const reported = totalOf(data);
+    if (reported !== null) total = reported;
+    for (const item of items) {
+      read++;
+      const family = classifyRequest(item);
+      if (!family) {
+        unknown++;
+        logger.warn(
+          { slfId: item.id, keys: keysOnly(item) },
+          "SLF request type not recognised; not ingested",
+        );
+        continue;
+      }
+      const familyItems = byFamily.get(family) ?? [];
+      familyItems.push(item);
+      byFamily.set(family, familyItems);
+    }
+    if (
+      items.length === 0 ||
+      items.length < PAGE_SIZE ||
+      Array.isArray(data) ||
+      (total !== null && read >= total)
+    ) {
+      complete = true;
+      break;
+    }
+  }
+  if ((total !== null && read < total) || unknown > 0) complete = false;
+  const snap = { byFamily, complete, total };
+  cache = { at: Date.now(), snap };
+  return snap;
 }
 export async function syncFamily(productFamily: string): Promise<number> {
   const st = stateFor(productFamily);
@@ -82,13 +124,16 @@ export async function syncFamily(productFamily: string): Promise<number> {
     );
     return 0;
   }
-  const base = listUrlFor(productFamily);
   try {
-    if (OFFER_ONLY_FAMILIES.has(productFamily)) {
-      const { data } = await slfClient.get(base);
+    if (productFamily === "factoring-bid") {
+      const { data } = await slfClient.get(FACTORING_OFFERS_URL);
       const items = itemsOf(data);
-      if (items === null) warnUnrecognised(productFamily, base, data);
-      else if (items.length > 0)
+      if (items === null)
+        logger.warn(
+          { url: FACTORING_OFFERS_URL, keys: keysOnly(data) },
+          "SLF response envelope not recognised",
+        );
+      else if (items.length)
         logger.warn(
           { family: productFamily, activeOffers: items.length },
           "SLF active factoring offers present but not yet stored",
@@ -100,53 +145,28 @@ export async function syncFamily(productFamily: string): Promise<number> {
       );
       return 0;
     }
-
-    let synced = 0;
-    let complete = false;
-    let reportedTotal: number | null = null;
+    const snap = await loadAllRequests();
+    const mine = snap.byFamily.get(productFamily) ?? [];
     const seenIds: string[] = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const url = `${base}?page=${page}&page_size=${PAGE_SIZE}`;
-      const { data } = await slfClient.get(url);
-      const items = itemsOf(data);
-      if (items === null) {
-        warnUnrecognised(productFamily, url, data);
-        break;
-      }
-      const t = totalOf(data);
-      if (t !== null) reportedTotal = t;
-      for (const item of items) {
-        await ingestRequest(productFamily, item as Record<string, any>);
-        const id = (item as { id?: unknown }).id;
-        if (id != null) seenIds.push(String(id));
-        synced += 1;
-      }
-      const lastPage =
-        items.length === 0 ||
-        items.length < PAGE_SIZE ||
-        Array.isArray(data) ||
-        (reportedTotal !== null && synced >= reportedTotal);
-      if (lastPage) {
-        complete = true;
-        break;
-      }
+    for (const item of mine) {
+      await ingestRequest(productFamily, item as Record<string, any>);
+      if (item.id != null) seenIds.push(String(item.id));
     }
-    if (!complete || (reportedTotal !== null && reportedTotal > synced)) {
+    if (snap.complete) await retireMissing(productFamily, seenIds);
+    else
       logger.warn(
-        { family: productFamily, reportedTotal, synced, complete },
-        "SLF reported more records than were synced; stale records left in place",
+        { family: productFamily, total: snap.total },
+        "SLF request list not fully read; stale records left in place",
       );
-    } else {
-      await retireMissing(productFamily, seenIds);
-    }
     markSuccess(st, now);
     logger.info(
-      { family: productFamily, synced, reportedTotal },
+      { family: productFamily, synced: mine.length, total: snap.total },
       "SLF sync complete",
     );
-    return synced;
+    return mine.length;
   } catch (err: unknown) {
-    st.consecutiveFailures += 1;
+    cache = null;
+    st.consecutiveFailures++;
     st.lastError = getErrorMessage(err);
     const backoff = calculateBackoff(st.consecutiveFailures);
     st.suspendedUntil = now + backoff;
@@ -177,7 +197,7 @@ export async function retireMissing(
   if (seenIds.length === 0) return 0;
   const { rowCount } = await pool.query(
     `UPDATE slf_requests SET retired_at = now()
-      WHERE product_family = $1 AND retired_at IS NULL AND id::text <> ALL($2::text[])`,
+      WHERE product_family = $1 AND retired_at IS NULL AND slf_id::text <> ALL($2::text[])`,
     [productFamily, seenIds],
   );
   if (rowCount)

@@ -1,0 +1,9 @@
+-- SLF_FAMILY_KEY_v1: re-key family-scoped ids while preserving child links.
+ALTER TABLE slf_requests ADD COLUMN IF NOT EXISTS slf_id BIGINT;
+
+UPDATE slf_contracts k SET request_id = m.new_id FROM (SELECT id old_id, (CASE product_family WHEN 'credit' THEN 1 WHEN 'equipment-financing' THEN 2 WHEN 'invoice' THEN 3 WHEN 'factoring-bid' THEN 4 ELSE 9 END) * 1000000000000 + id new_id FROM slf_requests WHERE id < 1000000000000) m WHERE k.request_id=m.old_id;
+UPDATE slf_offers o SET request_id = m.new_id FROM (SELECT id old_id, (CASE product_family WHEN 'credit' THEN 1 WHEN 'equipment-financing' THEN 2 WHEN 'invoice' THEN 3 WHEN 'factoring-bid' THEN 4 ELSE 9 END) * 1000000000000 + id new_id FROM slf_requests WHERE id < 1000000000000) m WHERE o.request_id=m.old_id;
+UPDATE slf_files f SET owner_id = m.new_id FROM (SELECT id old_id, (CASE product_family WHEN 'credit' THEN 1 WHEN 'equipment-financing' THEN 2 WHEN 'invoice' THEN 3 WHEN 'factoring-bid' THEN 4 ELSE 9 END) * 1000000000000 + id new_id FROM slf_requests WHERE id < 1000000000000) m WHERE f.owner_kind LIKE 'request\_%' AND f.owner_id=m.old_id;
+UPDATE slf_files f SET request_id = m.new_id FROM (SELECT id old_id, (CASE product_family WHEN 'credit' THEN 1 WHEN 'equipment-financing' THEN 2 WHEN 'invoice' THEN 3 WHEN 'factoring-bid' THEN 4 ELSE 9 END) * 1000000000000 + id new_id FROM slf_requests WHERE id < 1000000000000) m WHERE f.request_id=m.old_id;
+UPDATE slf_requests r SET slf_id=m.old_id, id=m.new_id FROM (SELECT id old_id, (CASE product_family WHEN 'credit' THEN 1 WHEN 'equipment-financing' THEN 2 WHEN 'invoice' THEN 3 WHEN 'factoring-bid' THEN 4 ELSE 9 END) * 1000000000000 + id new_id FROM slf_requests WHERE id < 1000000000000) m WHERE r.id=m.old_id;
+CREATE UNIQUE INDEX IF NOT EXISTS slf_requests_family_slf_id ON slf_requests(product_family, slf_id);

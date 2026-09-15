@@ -1,6 +1,7 @@
 // SLF_FULL_MODEL_v1 - persist the ENTIRE SLF request payload, relationally + raw.
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool";
+import { requestKey } from "./requestKey";
 import { logger } from "../platform/logger";
 import { deriveStage, toBool, toNum, uploadedAtFromUrl } from "./derive";
 import {
@@ -124,7 +125,9 @@ async function upsertSub(
 
 export async function ingestRequest(family: string, req: Json): Promise<void> {
   if (!req || typeof req.id !== "number") return;
-  const requestId: number = req.id;
+  // SLF_FAMILY_KEY_v1 - internal key encodes the family; see requestKey.ts.
+  const slfId: number = req.id;
+  const requestId: number = requestKey(family, slfId);
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
@@ -175,6 +178,10 @@ export async function ingestRequest(family: string, req: Json): Promise<void> {
       );
       return;
     }
+    await c.query(`UPDATE slf_requests SET slf_id = $2 WHERE id = $1`, [
+      requestId,
+      slfId,
+    ]);
     // Invoice rows carry a single `contract` object, not a `contracts` array.
     const contracts: Json[] = Array.isArray(req.contracts)
       ? req.contracts
