@@ -18,12 +18,16 @@ function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return "Unknown SLF sync error";
 }
-// SLF_REQUESTS_ENVELOPE_v1 - production SLF does not use DRF's { results }.
+// SLF_BROKER_SYNC_v1
+// Verified against production with the Boreal Financial broker token, 15 Sep 2026:
 // /api/credit/request/, /api/equipment-financing/request/ and /api/invoice/
 // return { requests: [...], total, summary, allStates }; /api/factoring-bid/
 // returns a bare array. The old reader only knew bare arrays and { results },
 // so every envelope read as empty and the sync logged "synced: 0" forever.
 const ITEM_KEYS = ["results", "requests"] as const;
+export const PAGE_SIZE = 100;
+const MAX_PAGES = 50;
+const OFFER_ONLY_FAMILIES = new Set(["factoring-bid"]);
 export function itemsOf(data: unknown): Record<string, unknown>[] | null {
   if (Array.isArray(data)) return data as Record<string, unknown>[];
   if (data && typeof data === "object") {
@@ -39,6 +43,21 @@ function totalOf(data: unknown): number | null {
   const d = data as { total?: unknown; count?: unknown };
   const t = typeof d.total === "number" ? d.total : d.count;
   return typeof t === "number" && Number.isFinite(t) ? t : null;
+}
+function warnUnrecognised(family: string, url: string, data: unknown) {
+  // Key names only - values can carry applicant PII.
+  logger.warn(
+    {
+      family,
+      url,
+      shape: Array.isArray(data) ? "array" : typeof data,
+      keys:
+        data && typeof data === "object"
+          ? Object.keys(data as object).slice(0, 20)
+          : [],
+    },
+    "SLF response envelope not recognised; ingested nothing from this page",
+  );
 }
 // SLF_SYNC_LIST_URL_v1 - not every product family exposes /request/. Per the
 // SLF OpenAPI spec, credit and equipment-financing do, but factoring-bid and
@@ -63,59 +82,68 @@ export async function syncFamily(productFamily: string): Promise<number> {
     );
     return 0;
   }
-  let url: string | null = listUrlFor(productFamily);
-  let synced = 0;
-  let reportedTotal: number | null = null;
-  const seenIds: string[] = [];
+  const base = listUrlFor(productFamily);
   try {
-    while (url) {
-      const resp: { data: unknown } = await slfClient.get(url);
-      const data: unknown = resp.data;
+    if (OFFER_ONLY_FAMILIES.has(productFamily)) {
+      const { data } = await slfClient.get(base);
+      const items = itemsOf(data);
+      if (items === null) warnUnrecognised(productFamily, base, data);
+      else if (items.length > 0)
+        logger.warn(
+          { family: productFamily, activeOffers: items.length },
+          "SLF active factoring offers present but not yet stored",
+        );
+      markSuccess(st, now);
+      logger.info(
+        { family: productFamily, synced: 0, offersOnly: true },
+        "SLF sync complete",
+      );
+      return 0;
+    }
+
+    let synced = 0;
+    let complete = false;
+    let reportedTotal: number | null = null;
+    const seenIds: string[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const url = `${base}?page=${page}&page_size=${PAGE_SIZE}`;
+      const { data } = await slfClient.get(url);
       const items = itemsOf(data);
       if (items === null) {
-        // Key names only - values can carry applicant PII.
-        logger.warn(
-          {
-            family: productFamily,
-            url,
-            shape: Array.isArray(data) ? "array" : typeof data,
-            keys:
-              data && typeof data === "object"
-                ? Object.keys(data as object).slice(0, 20)
-                : [],
-          },
-          "SLF response envelope not recognised; ingested nothing from this page",
-        );
+        warnUnrecognised(productFamily, url, data);
+        break;
       }
-      const pageTotal = totalOf(data);
-      if (pageTotal !== null) reportedTotal = pageTotal;
-      for (const item of items ?? []) {
+      const t = totalOf(data);
+      if (t !== null) reportedTotal = t;
+      for (const item of items) {
         await ingestRequest(productFamily, item as Record<string, any>);
-        const seenId = (item as { id?: unknown }).id;
-        if (seenId != null) seenIds.push(String(seenId));
+        const id = (item as { id?: unknown }).id;
+        if (id != null) seenIds.push(String(id));
         synced += 1;
       }
-      const nextUrl: string | null =
-        data && typeof data === "object"
-          ? ((data as { next?: string | null }).next ?? null)
-          : null;
-      url = nextUrl
-        ? nextUrl.replace(String(slfClient.defaults.baseURL ?? ""), "")
-        : null;
+      const lastPage =
+        items.length === 0 ||
+        items.length < PAGE_SIZE ||
+        Array.isArray(data) ||
+        (reportedTotal !== null && synced >= reportedTotal);
+      if (lastPage) {
+        complete = true;
+        break;
+      }
     }
-    if (reportedTotal !== null && reportedTotal > synced) {
-      // SLF reported more rows than we walked - pagination we don't follow.
+    if (!complete || (reportedTotal !== null && reportedTotal > synced)) {
       logger.warn(
-        { family: productFamily, reportedTotal, synced },
-        "SLF reported more records than were synced",
+        { family: productFamily, reportedTotal, synced, complete },
+        "SLF reported more records than were synced; stale records left in place",
       );
+    } else {
+      await retireMissing(productFamily, seenIds);
     }
-    await retireMissing(productFamily, seenIds);
-    st.lastSuccessfulSync = now;
-    st.consecutiveFailures = 0;
-    st.lastError = null;
-    st.suspendedUntil = null;
-    logger.info({ family: productFamily, synced }, "SLF sync complete");
+    markSuccess(st, now);
+    logger.info(
+      { family: productFamily, synced, reportedTotal },
+      "SLF sync complete",
+    );
     return synced;
   } catch (err: unknown) {
     st.consecutiveFailures += 1;
@@ -128,6 +156,13 @@ export async function syncFamily(productFamily: string): Promise<number> {
     );
     throw err;
   }
+}
+
+function markSuccess(st: ReturnType<typeof stateFor>, now: number) {
+  st.lastSuccessfulSync = now;
+  st.consecutiveFailures = 0;
+  st.lastError = null;
+  st.suspendedUntil = null;
 }
 
 // SLF_RETIRE_STALE_v1

@@ -165,7 +165,8 @@ export async function ingestRequest(family: string, req: Json): Promise<void> {
         terms.netAmount,
       ],
     );
-    // SLF_REQUESTS_ENVELOPE_v1 - an id already owned by another family.
+    // SLF_BROKER_SYNC_v1 - SLF ids are per family but slf_requests.id is the
+    // sole key. Never let invoice #1 overwrite credit request #1.
     if (up.rowCount === 0) {
       await c.query("ROLLBACK");
       logger.warn(
