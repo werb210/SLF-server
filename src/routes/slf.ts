@@ -1,7 +1,9 @@
 // SLF_FULL_MODEL_v1 - read API for the portal's SLF silo.
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 import { pool } from "../db/pool";
-import { syncAllFamilies } from "../slf/sync.worker";
+import { runExclusiveSync } from "../slf/sync.worker";
+import { toUpstreamError } from "../platform/redactAxios"; // SLF_REDACT_AXIOS_v789
 import { slfClient } from "../slf/client"; // SLF_BROKER_OF_RECORD_v1
 import { dealIdToKey } from "../slf/requestKey"; // SLF_FAMILY_KEY_v1
 export function slfRouter() {
@@ -203,7 +205,7 @@ export function slfRouter() {
       const { data } = await slfClient.get("/api/broker/");
       res.json({ success: true, data });
     } catch (e) {
-      next(e);
+      next(toUpstreamError(e));
     }
   });
   r.get("/broker/fi", async (_req, res, next) => {
@@ -211,7 +213,7 @@ export function slfRouter() {
       const { data } = await slfClient.get("/api/broker/fi/");
       res.json({ success: true, data });
     } catch (e) {
-      next(e);
+      next(toUpstreamError(e));
     }
   });
   r.get("/broker/summary", async (_req, res, next) => {
@@ -232,13 +234,31 @@ export function slfRouter() {
       );
       res.json({ success: true, data: { rows, totals } });
     } catch (e) {
-      next(e);
+      next(toUpstreamError(e));
     }
   });
-  r.post("/sync", async (_req, res, next) => {
+  // SLF_SYNC_LOCK_v789 - manual sync shares the cron's advisory lock, and is
+  // limited to one request a minute across all callers: a sync is global, so
+  // per-caller limits would still let two staff members stack them up.
+  const manualSyncLimit = rateLimit({
+    windowMs: 60_000,
+    limit: 1,
+    keyGenerator: () => "slf-manual-sync",
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { success: false, error: "Manual sync is limited to once a minute" },
+  });
+  r.post("/sync", manualSyncLimit, async (req, res, next) => {
     try {
-      await syncAllFamilies(true);
-      res.json({ success: true });
+      const force =
+        req.query.force === "true" ||
+        (typeof req.body === "object" && req.body !== null && req.body.force === true);
+      const { ran } = await runExclusiveSync(force);
+      if (!ran)
+        return res
+          .status(409)
+          .json({ success: false, error: "A sync is already running" });
+      res.json({ success: true, force });
     } catch (e) {
       next(e);
     }

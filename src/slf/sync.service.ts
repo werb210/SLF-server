@@ -25,6 +25,11 @@ export const FACTORING_OFFERS_URL = "/api/factoring-bid/";
 export const PAGE_SIZE = 100;
 const MAX_PAGES = 50;
 const CACHE_MS = 60_000;
+// SLF_UNKNOWN_TOLERANCE_v789 - one item of a shape we do not recognise used to
+// mark the whole read incomplete, so a single odd record switched off
+// retireMissing for every family indefinitely. A small share is logged and
+// skipped; above this share the read is treated as untrustworthy.
+export const MAX_UNKNOWN_SHARE = 0.05;
 
 export function itemsOf(data: unknown): Item[] | null {
   if (Array.isArray(data)) return data as Item[];
@@ -110,19 +115,37 @@ async function loadAllRequests(): Promise<Snapshot> {
       break;
     }
   }
-  if ((total !== null && read < total) || unknown > 0) complete = false;
+  if (total !== null && read < total) complete = false;
+  if (read > 0 && unknown / read > MAX_UNKNOWN_SHARE) {
+    logger.warn(
+      { read, unknown, maxShare: MAX_UNKNOWN_SHARE },
+      "SLF unrecognised request share too high; stale records left in place",
+    );
+    complete = false;
+  }
   const snap = { byFamily, complete, total };
   cache = { at: Date.now(), snap };
   return snap;
 }
-export async function syncFamily(productFamily: string): Promise<number> {
+// SLF_SYNC_RESULT_v789 - a family that was not actually synced used to be
+// recorded as success with 0 records, which is indistinguishable from a family
+// with no deals (and turned sync-status green while a family sat in backoff).
+export type SyncResult =
+  | { status: "success"; records: number }
+  | { status: "skipped"; records: 0; reason: string };
+export const NOT_IMPLEMENTED = "not implemented";
+
+export async function syncFamily(
+  productFamily: string,
+  opts: { force?: boolean } = {},
+): Promise<SyncResult> {
   const st = stateFor(productFamily);
   const now = Date.now();
-  if (st.suspendedUntil && now < st.suspendedUntil) {
-    logger.warn(
-      `SLF ${productFamily} suspended until ${new Date(st.suspendedUntil).toISOString()}`,
-    );
-    return 0;
+  // force (manual POST /sync?force=true) bypasses the backoff.
+  if (!opts.force && st.suspendedUntil && now < st.suspendedUntil) {
+    const until = new Date(st.suspendedUntil).toISOString();
+    logger.warn(`SLF ${productFamily} suspended until ${until}`);
+    return { status: "skipped", records: 0, reason: `backoff until ${until}` };
   }
   try {
     if (productFamily === "factoring-bid") {
@@ -138,12 +161,14 @@ export async function syncFamily(productFamily: string): Promise<number> {
           { family: productFamily, activeOffers: items.length },
           "SLF active factoring offers present but not yet stored",
         );
+      // SLF_FACTORING_SKIPPED_v789 - factoring offers are fetched (so a broken
+      // endpoint still surfaces as a failure) but not stored. Say so.
       markSuccess(st, now);
       logger.info(
         { family: productFamily, synced: 0, offersOnly: true },
-        "SLF sync complete",
+        "SLF factoring-bid skipped: not implemented",
       );
-      return 0;
+      return { status: "skipped", records: 0, reason: NOT_IMPLEMENTED };
     }
     const snap = await loadAllRequests();
     const mine = snap.byFamily.get(productFamily) ?? [];
@@ -163,7 +188,7 @@ export async function syncFamily(productFamily: string): Promise<number> {
       { family: productFamily, synced: mine.length, total: snap.total },
       "SLF sync complete",
     );
-    return mine.length;
+    return { status: "success", records: mine.length };
   } catch (err: unknown) {
     cache = null;
     st.consecutiveFailures++;

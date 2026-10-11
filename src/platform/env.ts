@@ -9,10 +9,6 @@ export const envSchema = z.object({
   DATABASE_URL: z.string(),
   JWT_SECRET: z.string(),
   SERVICE_NAME: z.string().default("slf-server"),
-  OPENAI_API_KEY: z.string().optional(),
-  TWILIO_ACCOUNT_SID: z.string().optional(),
-  TWILIO_AUTH_TOKEN: z.string().optional(),
-  HMAC_SECRET: z.string().default(""),
   // SLF_REQUIRE_UPSTREAM_CONFIG_v230
   // Required, non-empty. A blank token produces the header "Token " and a blank
   // base URL produces a request to nowhere - neither throws, so the sync reports
@@ -32,8 +28,7 @@ export const envSchema = z.object({
   ALLOWED_ORIGINS: z.string().default("https://staff.boreal.financial"),
   LOG_LEVEL: z.string().default("info"),
   SLF_PRODUCT_FAMILIES: z.string().default("credit,equipment-financing,factoring-bid,invoice"),
-  SYNC_INTERVAL_MINUTES: z.string().default("5"),
-  API_KEY: z.string().default("")
+  SYNC_INTERVAL_MINUTES: z.string().default("5")
 })
 
 // SLF_REQUIRE_UPSTREAM_CONFIG_v230
