@@ -3,31 +3,42 @@
 
 name: Build and deploy Node.js app to Azure Web App - slf-server
 
+# SLF_DEPLOY_AFTER_CI_v789 - deploy only a main commit that CI Audit passed, and
+# deploy exactly that commit. To redeploy by hand, re-run CI Audit on main.
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI Audit"]
+    types: [completed]
+    branches: [main]
 
 jobs:
   build:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event != 'pull_request' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
     permissions:
       contents: read #This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Set up Node.js version
         uses: actions/setup-node@v5
         with:
           node-version: '22.x'
+          cache: 'npm'
 
-      - name: npm install, build, and test
+      - name: npm ci and build
         run: |
-          npm install
-          npm run build --if-present
-          npm run test --if-present
+          npm ci
+          npm run build
+
+      - name: Prune devDependencies
+        run: npm prune --omit=dev
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v5
@@ -62,4 +73,3 @@ jobs:
           app-name: 'slf-server'
           slot-name: 'Production'
           package: .
-          

@@ -67,10 +67,13 @@ describe("the config that decided whether the sync did anything", () => {
 })
 
 describe("the committed token", () => {
-  it("is no longer in .env.example", async () => {
+  // SLF_NO_TOKEN_LITERAL_v789 - this test used to quote the leaked token itself,
+  // which kept it in the tree. Assert on the shape instead: a DRF token is 40 hex
+  // characters, and nothing in .env.example should look like one.
+  it("is no longer in .env.example, and nothing token-shaped replaced it", async () => {
     const fs = await import("node:fs")
     const example = fs.readFileSync(".env.example", "utf-8")
-    expect(example).not.toContain("c6b32011b346f3cf2df798ceb20757aec835d74b")
+    expect(example).not.toMatch(/[0-9a-f]{40}/i)
     expect(example).toContain("replace-me")
   })
 })

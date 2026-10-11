@@ -1,9 +1,12 @@
 import { NextFunction, Request, Response } from "express"
 import { logger } from "./logger"
+import { redactAxiosError } from "./redactAxios"
 
 // SLF_ERROR_REDACTION_v784 - raw error messages (SQL, upstream URLs, stack
 // details) used to reach the client. Log everything, return a generic body.
-export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
+export function errorHandler(rawErr: unknown, req: Request, res: Response, next: NextFunction) {
+  // SLF_REDACT_AXIOS_v789 - an upstream axios error carries the SLF token.
+  const err = redactAxiosError(rawErr)
   logger.error(
     {
       requestId: req.id,

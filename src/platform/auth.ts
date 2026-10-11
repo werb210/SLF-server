@@ -5,12 +5,29 @@ import { env } from "./env"
 // SLF_AUTH_STAFF_ONLY_v784 - this API is for staff and services only. Any valid
 // signature used to pass, so client, applicant and tracked-link tokens signed
 // with the shared secret could read the SLF mirror.
-const STAFF_ROLES = new Set(["Admin", "Staff", "Ops", "Marketing"])
+// SLF_AUTH_NARROW_v789 - narrowed further: only Admin and Staff humans, and only
+// bf-server among services. Ops and Marketing tokens are signed with the same
+// secret but have no business reading lender and applicant data, and a service
+// token used to pass on kind alone, whichever service minted it.
+const STAFF_ROLES = new Set(["Admin", "Staff"])
+const ALLOWED_SERVICES = new Set(["bf-server"])
+export const EXPECTED_AUDIENCE = "slf-server"
+
+function audienceAllowed(aud: unknown): boolean {
+  if (aud === undefined) return true
+  if (typeof aud === "string") return aud === EXPECTED_AUDIENCE
+  if (Array.isArray(aud)) return aud.includes(EXPECTED_AUDIENCE)
+  return false
+}
 
 export function isAllowedPrincipal(decoded: unknown): boolean {
   if (typeof decoded !== "object" || decoded === null) return false
   const claims = decoded as Record<string, unknown>
-  if (claims.kind === "service") return true
+  if (!audienceAllowed(claims.aud)) return false
+  if (claims.kind === "service") {
+    const service = typeof claims.service === "string" ? claims.service : claims.source
+    return typeof service === "string" && ALLOWED_SERVICES.has(service)
+  }
   const role = claims.role
   if (typeof role !== "string" || !STAFF_ROLES.has(role)) return false
   const subject = typeof claims.sub === "string" && claims.sub ? claims.sub : claims.id

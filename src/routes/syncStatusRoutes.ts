@@ -30,7 +30,10 @@ router.get("/sync-status", async (_req, res) => {
       return {
         family,
         healthy: last?.status === "success",
-        lastStatus: last?.status ?? "never_run",
+        // SLF_SYNC_RESULT_v789 - a skipped run reads "skipped: <reason>", e.g.
+        // factoring-bid's "skipped: not implemented", never "success".
+        lastStatus:
+          last?.status === "skipped" && last.error ? `skipped: ${last.error}` : last?.status ?? "never_run",
         lastRecords: last?.records ?? 0,
         lastError: last?.error ?? null,
         lastFinishedAt: last?.finished_at ?? null,

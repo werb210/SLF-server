@@ -12,7 +12,6 @@ vi.hoisted(() => {
 import express from "express"
 import type { Server } from "http"
 import type { AddressInfo } from "net"
-import { readFileSync } from "fs"
 import jwt from "jsonwebtoken"
 import { requireAuth } from "../src/platform/auth"
 import { errorHandler } from "../src/platform/errorHandler"
@@ -20,6 +19,7 @@ import { requestId } from "../src/platform/requestId"
 import { logger } from "../src/platform/logger"
 import metricsRoutes from "../src/platform/metricsRoutes"
 import { docsRouter } from "../src/routes/docs"
+import { createApp } from "../src/app"
 
 const SECRET = "test-secret-min-10"
 const sign = (payload: object) => jwt.sign(payload, SECRET, { algorithm: "HS256" })
@@ -66,12 +66,12 @@ describe("requireAuth", () => {
     expect(await call(jwt.sign({ kind: "service" }, SECRET, { algorithm: "HS512" }))).toBe(401)
   })
 
+  // SLF_AUTH_NARROW_v789 - Ops, Marketing and services other than bf-server are
+  // now refused; see test/auth.v789.test.ts.
   it.each([
-    ["service token", { kind: "service", sub: "slf-sync" }],
+    ["bf-server service token", { kind: "service", service: "bf-server" }],
     ["Admin", { role: "Admin", sub: "user:1" }],
     ["Staff", { role: "Staff", sub: "user:2" }],
-    ["Ops", { role: "Ops", id: "user:3" }],
-    ["Marketing", { role: "Marketing", sub: "user:4" }],
     ["legacy agent token", { id: "agent-service", role: "Staff" }],
   ])("accepts %s", async (_name, payload) => {
     expect(await call(sign(payload))).toBe(200)
@@ -87,6 +87,9 @@ describe("requireAuth", () => {
     ["Lender", { role: "Lender", sub: "lender:1" }],
     ["Referrer", { role: "Referrer", sub: "ref:1" }],
     ["staff role without subject", { role: "Staff" }],
+    ["Ops", { role: "Ops", id: "user:3" }],
+    ["Marketing", { role: "Marketing", sub: "user:4" }],
+    ["unnamed service", { kind: "service", sub: "slf-sync" }],
   ])("403s %s", async (_name, payload) => {
     expect(await call(sign(payload))).toBe(403)
   })
@@ -161,9 +164,17 @@ describe("/metrics", () => {
   app.use("/metrics", requireAuth)
   app.use(metricsRoutes)
 
-  it("is wired behind requireAuth in server.ts", () => {
-    const src = readFileSync("src/server.ts", "utf8")
-    expect(src).toMatch(/app\.use\("\/metrics", requireAuth\); app\.use\(metricsRoutes\)/)
+  // SLF_NO_SOURCE_GREP_v789 - was a regex over server.ts; now the real app.
+  it("is wired behind requireAuth in the real app", async () => {
+    await withServer(createApp({ nodeEnv: "production" }), async (base) => {
+      expect((await fetch(`${base}/metrics`)).status).toBe(401)
+      const marketing = sign({ role: "Marketing", sub: "user:4" })
+      expect((await fetch(`${base}/metrics`, { headers: { authorization: `Bearer ${marketing}` } })).status).toBe(403)
+      const staff = sign({ role: "Staff", sub: "user:1" })
+      const res = await fetch(`${base}/metrics`, { headers: { authorization: `Bearer ${staff}` } })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain("process_cpu")
+    })
   })
 
   it("401s without a token, 403s a client and serves staff", async () => {
@@ -194,10 +205,20 @@ describe("/docs", () => {
     })
   })
 
-  it("server.ts passes NODE_ENV and keeps / and /health public", () => {
-    const src = readFileSync("src/server.ts", "utf8")
-    expect(src).toContain("docsRouter(app, env.NODE_ENV)")
-    expect(src).toContain('app.get("/", ')
-    expect(src).toContain('app.use("/health", healthRoutes)')
+  // SLF_NO_SOURCE_GREP_v789 - was three toContain checks over server.ts.
+  it("the real app hides /docs in production and keeps / and /health public", async () => {
+    await withServer(createApp({ nodeEnv: "production" }), async (base) => {
+      expect((await fetch(`${base}/docs/`)).status).toBe(404)
+      const root = await fetch(`${base}/`)
+      expect(root.status).toBe(200)
+      expect((await root.json()).status).toBe("ok")
+      const health = await fetch(`${base}/health`)
+      expect(health.status).toBe(200)
+      expect((await health.json()).status).toBe("ok")
+      expect((await fetch(`${base}/api/slf/deals`)).status).toBe(401)
+    })
+    await withServer(createApp({ nodeEnv: "development" }), async (base) => {
+      expect((await fetch(`${base}/docs/`)).status).toBe(200)
+    })
   })
 })

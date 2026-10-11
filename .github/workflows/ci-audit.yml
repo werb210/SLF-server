@@ -7,6 +7,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   audit:
     runs-on: ubuntu-24.04
@@ -15,70 +18,54 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup Node 20
+      # SLF_CI_STRICT_v789 - the same major as the deploy and package.json engines.
+      - name: Setup Node 22
         uses: actions/setup-node@v5
         with:
-          node-version: '20.11.1'
+          node-version: '22.x'
           cache: 'npm'
 
       - name: Verify Node Version
         run: node -v
 
+      # npm ci only: a lockfile that does not match package.json is a failure,
+      # not something to paper over with npm install.
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
-      - name: Run Lint (if exists)
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript Check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Run once. A retry hides flaky tests instead of fixing them.
+      - name: Tests
+        run: npm test
+
+      - name: Source-grep test guard
+        run: node scripts/check-source-grep-tests.mjs
+
+      - name: Audit report
+        if: always()
         run: |
-          if npm run | grep -q "lint"; then
-            npm run lint
-          else
-            echo "No lint script found"
-          fi
-
-      - name: Run TypeScript Check (if exists)
-        run: |
-          if npm run | grep -q "typecheck"; then
-            npm run typecheck
-          elif [ -f "tsconfig.json" ]; then
-            npx tsc --noEmit
-          else
-            echo "No TypeScript config found"
-          fi
-
-      - name: Run Build (if exists)
-        run: |
-          if npm run | grep -q "build"; then
-            npm run build
-          else
-            echo "No build script found"
-          fi
-
-      - name: Run Tests (if exists)
-        run: |
-          if npm run | grep -q "test"; then
-            npm test -- --verbose || npm test
-          else
-            echo "No test script found"
-          fi
-
-      - name: Run npm audit
-        run: npm audit --json > audit.json || true
-
-      - name: Generate Report
-        run: |
+          npm audit --json > audit.json || true
           echo "Node version: $(node -v)" > report.txt
           echo "" >> report.txt
           echo "Dependency Audit:" >> report.txt
-          if [ -f audit.json ]; then
-            cat audit.json >> report.txt
-          else
-            echo "No audit data" >> report.txt
-          fi
+          cat audit.json >> report.txt
 
       - name: Upload Report Artifact
+        if: always()
         uses: actions/upload-artifact@v5
         with:
           name: ci-audit-report
           path: |
             report.txt
             audit.json
+
+      - name: Fail on high or critical vulnerabilities
+        run: npm audit --audit-level=high
