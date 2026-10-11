@@ -6,6 +6,7 @@ import { Router } from "express"
 import { pool } from "../db/pool"
 import { allowedFamilies } from "../config/env"
 import { stateFor } from "../slf/slf.state"
+import { logger } from "../platform/logger"
 
 const router = Router()
 
@@ -15,7 +16,11 @@ router.get("/sync-status", async (_req, res) => {
   }>(
     `SELECT DISTINCT ON (product_family) product_family, status, records, error, finished_at
        FROM slf_sync_runs ORDER BY product_family, started_at DESC`,
-  ).catch(() => ({ rows: [] as never[] }))
+  ).catch((err) => {
+    // SLF_SYNC_STATUS_LOG_v784 - an empty answer must not hide a failing query.
+    logger.error({ err }, "sync-status query failed")
+    return { rows: [] as never[] }
+  })
 
   const byFamily = new Map(rows.map((r) => [r.product_family, r]))
   res.json({
