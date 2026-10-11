@@ -1,11 +1,13 @@
 import { NextFunction, Request, Response } from "express"
 import { logger } from "./logger"
 
+// SLF_ERROR_REDACTION_v784 - raw error messages (SQL, upstream URLs, stack
+// details) used to reach the client. Log everything, return a generic body.
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
   logger.error(
     {
       requestId: req.id,
-      error: err
+      err
     },
     "Unhandled error"
   )
@@ -14,18 +16,19 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
     return next(err)
   }
 
-  const status =
-    typeof err === "object" && err !== null && "status" in err && typeof (err as { status?: number }).status === "number"
-      ? (err as { status: number }).status
-      : 500
-  const message =
-    typeof err === "object" && err !== null && "message" in err && typeof (err as { message?: string }).message === "string"
-      ? (err as { message: string }).message
-      : "Internal Server Error"
+  const e = (typeof err === "object" && err !== null ? err : {}) as {
+    status?: unknown
+    statusCode?: unknown
+    expose?: unknown
+    message?: unknown
+  }
+  const rawStatus = typeof e.status === "number" ? e.status : typeof e.statusCode === "number" ? e.statusCode : 500
+  const status = rawStatus >= 400 && rawStatus < 600 ? rawStatus : 500
+  const exposable = status < 500 && e.expose === true && typeof e.message === "string"
 
   return res.status(status).json({
     success: false,
-    error: message,
+    error: exposable ? (e.message as string) : "Internal Server Error",
     requestId: req.id
   })
 }
