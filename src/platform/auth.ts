@@ -13,10 +13,15 @@ const STAFF_ROLES = new Set(["Admin", "Staff"])
 const ALLOWED_SERVICES = new Set(["bf-server"])
 export const EXPECTED_AUDIENCE = "slf-server"
 
+// SLF_v792_STAFF_AUDIENCE - BF-Server staff access tokens carry aud
+// "boreal-staff-portal"; the portal sends them here for the SLF screens.
+export const STAFF_PORTAL_AUDIENCE = "boreal-staff-portal"
+const ACCEPTED_AUDIENCES = [EXPECTED_AUDIENCE, STAFF_PORTAL_AUDIENCE]
+
 function audienceAllowed(aud: unknown): boolean {
-  if (aud === undefined) return true
-  if (typeof aud === "string") return aud === EXPECTED_AUDIENCE
-  if (Array.isArray(aud)) return aud.includes(EXPECTED_AUDIENCE)
+  if (aud === undefined || aud === null) return true
+  if (typeof aud === "string") return ACCEPTED_AUDIENCES.includes(aud)
+  if (Array.isArray(aud)) return aud.some((a) => ACCEPTED_AUDIENCES.includes(a))
   return false
 }
 

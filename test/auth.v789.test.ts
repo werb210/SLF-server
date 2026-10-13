@@ -42,6 +42,8 @@ describe("requireAuth principals", () => {
     ["bf-server via source", { kind: "service", source: "bf-server" }],
     ["Staff with aud slf-server", { role: "Staff", sub: "user:2", aud: "slf-server" }],
     ["bf-server with aud list naming slf-server", { kind: "service", service: "bf-server", aud: ["slf-server", "x"] }],
+    // SLF_v792_STAFF_AUDIENCE - the real BF-Server staff access token shape.
+    ["BF-Server staff access token", { role: "Admin", sub: "5f0c6d2e-1111-4111-8111-111111111111", aud: "boreal-staff-portal", iss: "boreal-staff-server", tv: 0 }],
   ])("accepts %s", async (_name, payload) => {
     expect(await call(sign(payload))).toBe(200)
   })
